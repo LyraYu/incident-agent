@@ -1,0 +1,18 @@
+# 密钥,绝不上传
+.env
+
+# 虚拟环境,不上传(别人自己建)
+venv/
+
+# Python 缓存
+__pycache__/
+*.pyc
+
+# 系统杂项
+.DS_Store
+
+# 练手/临时文件,不上传
+hello_gemini.py
+
+# 跑批原始日志,过程产物,结论进 design doc
+tc*_runs.txt
