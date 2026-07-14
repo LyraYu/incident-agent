@@ -73,7 +73,7 @@ def report_demo(text: str = Query(min_length=1, max_length=2000)) -> str:
     body = r.report if r.status == "report" else r.clarification
     return ("<article style='max-width:52rem;margin:2rem auto;"
             "font-family:sans-serif;line-height:1.6'>"
-            f"{markdown.markdown(body)}</article>")
+            f"{markdown.markdown(body, extensions=['nl2br'])}</article>")
 
 
 @app.get("/health")
