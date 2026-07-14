@@ -224,11 +224,14 @@ def run_tool_loop(
     user: str,
     generate_fn: Callable | None = None,
     max_rounds: int = 8,
+    history: list | None = None,
 ) -> tuple[str, list[dict]]:
     """Manual tool loop. Returns (final_text, trace).
 
     `system` is whatever prompt the caller hands in — this module has no
-    opinion on its content. trace is one dict per executed call:
+    opinion on its content. `history`: pass a list to keep the conversation — the loop extends it in
+    place, so passing the same list again continues the session.
+    trace is one dict per executed call:
     {"tool", "args", "ok", "payload"}. Returns ("", trace) if the round
     budget is exhausted.
     """
@@ -247,7 +250,9 @@ def run_tool_loop(
                 )
             )
 
-    contents: list = [types.Content(role="user", parts=[types.Part(text=user)])]
+    contents: list = history if history is not None else []
+    contents.append(types.Content(role="user", parts=[types.Part(text=user)]))    
+    
     trace: list[dict] = []
 
     for _ in range(max_rounds):
@@ -259,6 +264,7 @@ def run_tool_loop(
             if getattr(part, "function_call", None)
         ]
         if not calls:
+            contents.append(content)
             return (response.text or ""), trace
 
         contents.append(content)

@@ -13,7 +13,7 @@ report that omits a triggered rule (with the exact corrective line), and the
 reflection pass must repair it.
 """
 
-from src.agent import cross_check, investigate
+from src.agent import cross_check, follow_up, investigate
 from src.llm_client import execute_tool
 from src.tools import check_escalation
 
@@ -158,3 +158,34 @@ def test_reflection_repairs_flagged_report():
     assert "R005" in calls[1]              # the fix prompt named the issue
     assert "Emily Ng" in r.report          # the repaired report was adopted
     assert r.cross_check_issues == []
+
+
+def test_unknown_alarm_on_known_equipment_clarifies():
+    trace = [_eq_step("Etcher-03")]   # equipment found, incident locked
+    report = ("## Summary — what could not be found.\n"
+              "Alarm XYZ888 is not a known alarm code.\n"
+              "## Recommendation — ask the user to verify the alarm code.")
+    r = investigate("Etcher-03 reports alarm XYZ888.", loop_fn=_loop(report, trace))
+    assert r.status == "needs_clarification"
+    assert "XYZ888" in r.clarification
+
+
+def test_minimal_input_recovers_from_record():
+    trace = [_eq_step("Etcher-03")]
+    report = ("# Incident Report INC001 — RF101 on EQ001, lot LOT1055. "
+              "R001 david.koh@example.com; R002 irene.chua@example.com; "
+              "R003 clara.wong@example.com; R004 vendor.support@example.com; "
+              "R005 emily.ng@example.com. H101 H102 H103. SOP001.")
+    r = investigate("Etcher-03 is down.", loop_fn=_loop(report, trace))
+    assert r.status == "report"
+    assert _triggered(r) == {"R001", "R002", "R003", "R004", "R005"}
+    assert r.cross_check_issues == []
+
+
+def test_follow_up_scans_answer_for_fabricated_ids():
+    ok, issues = follow_up("what fixed it?", history=[],
+                           loop_fn=lambda s, u: ("H102 was fixed by tightening the RF cable.", []))
+    assert issues == []
+    bad, issues = follow_up("what fixed it?", history=[],
+                            loop_fn=lambda s, u: ("See incident H999 for details.", []))
+    assert issues and "H999" in issues[0]

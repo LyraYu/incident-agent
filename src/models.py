@@ -133,3 +133,5 @@ class InvestigationResult(BaseModel):
     cross_check_issues: list[str] = []
     tool_trace: list[dict] = []
     clarification: str | None = None
+    reflection_used: bool = False
+    session_id: str | None = None

@@ -272,8 +272,7 @@ def _evaluate_rules(
         RuleCheck(
             rule_id="R002",
             condition="same alarm on same equipment >= 2 times within 7 days",
-            observed=f"{count_7d} occurrence(s) in the 7-day window (current + {count_7d - 1} prior)",
-            triggered=count_7d >= 2,
+            observed=f"{count_7d} occurrence(s) in the 7-day window, including the current incident",            triggered=count_7d >= 2,
             level="escalate",
             target_role="Engineering Manager",
         ),

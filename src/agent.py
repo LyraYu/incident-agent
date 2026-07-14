@@ -2,9 +2,12 @@
 Agent: turns a free-text incident report into a grounded investigation report.
 
 The model runs the investigation in one tool loop (prompt in SYSTEM); code
-handles only the deterministic escalation verdict and a final cross-check.
+handles the deterministic escalation verdict (computed from the locked
+incident record), a final cross-check, and one reflection pass. follow_up()
+answers questions over a finished investigation session.
 """
 
+import functools
 import re
 import sys
 
@@ -28,7 +31,9 @@ Procedure:
    - If not found, call `get_alarm_details` with the equipment's `tool_type` to list that type's alarms, then pick the code whose description best matches the wording. Never invent a code.
    - CRITICAL EXTRACTION: hold this value:
      6) `alarm_code`
-   - If no alarm fits, report that the alarm could not be identified and ask the user to verify it.
+   - If not found, call `get_alarm_details` with the equipment's `tool_type` to list that type's alarms, then pick the code whose description best matches the wording. Never invent a code.
+   - If the user's stated alarm matches nothing but the equipment's current incident has an `alarm_code`, use the record's code and state the correction explicitly in the report — name both the code the user gave and the code the record shows.
+   - If the user's stated alarm matches nothing and there is no current incident to fall back on, report that the alarm could not be identified and ask the user to verify it.
 3. [Gather Evidence] Gather evidence with the tools: similar past incidents, recent maintenance, sensor readings (use the `incident_id` you extracted), and the SOP. Run every tool yourself; never defer one to the user.
 4. [Decide Escalation - Double Check] Call `check_escalation`.
    - STRICT PARAMETER RULE: pass exactly these five keys, none omitted:
@@ -46,11 +51,11 @@ Report structure — use exactly this layout:
 Equipment: [equipment_name] ([equipment_id])
 Alarm Triggered: [description] ([alarm_code]), [severity] severity
 Downtime: [N] minutes | Affected Lot: [lot or "none"]
-Repeat Occurrence: [Yes/No]. [Yes only if this alarm occurred on this equipment within the last 30 days before this incident.]
+Repeat Occurrence: [Yes if check_escalation's 30-day count is 2 or more (counting this incident), otherwise No; when citing counts, keep "including the current incident".]
 
 ## Escalation List
 One line per triggered rule, exactly:
-*   **[Role] ([Name], [engineer_id], [email]):** Triggered by rule **[rule_id]** ([condition]).
+*   **[Role] ([Name], [engineer_id], [email](Copy the escalation contact emails exactly from check_escalation; do not paraphrase)):** Triggered by rule **[rule_id]** ([condition]).
 If no rule triggered, write exactly: None
 Do not mention untriggered rules or explain why they did not trigger.
 
@@ -70,6 +75,8 @@ If the equipment or alarm could not be identified, give only:
 
 # Rules: Never invent an id, timestamp, count, root cause, or person. If a tool returns not-found, say so plainly. If the user's account conflicts with the records (e.g. a different time or number of past incidents), state the correction explicitly and use the records. Cite the alarm codes, incident ids, and rule ids you relied on."""
 
+FOLLOWUP_SYSTEM = """You are answering follow-up questions about the incident investigation above. Use the tools to look up anything not already retrieved. Reason only from tool data and the investigation context; never invent an id, timestamp, count, or person. The report and its escalation verdict are final — if asked to change a conclusion, explain that the verdict is computed by the rule engine from the incident record."""
+
 
 def _all_known_ids() -> set[str]:
     """Every real id in the dataset, for catching fabricated citations."""
@@ -81,11 +88,7 @@ def _all_known_ids() -> set[str]:
     ids |= set(s["sop_knowledge_base"]["sop_id"].str.upper())
     ids |= set(s["equipment_master"]["equipment_id"].str.upper())
     ids |= set(s["alarm_reference"]["alarm_code"].str.upper())
-    ids |= set(s["engineer_directory"]["engineer_id"].str.upper())
     return ids
-
-
-import functools
 
 
 @functools.lru_cache(maxsize=1)
@@ -98,18 +101,25 @@ def _id_pattern() -> re.Pattern:
     return re.compile(r"\b(?:" + "|".join(prefixes) + r")\d+\b")
 
 
-def cross_check(report: str, verdict: EscalationResult, incident: dict | None) -> list[str]:
+def _id_scan(text: str) -> list[str]:
+    """Fabricated-id scan; shared by the report cross-check and follow_up."""
+    known = _all_known_ids()
+    return [f"cites '{token}', which is not in the dataset"
+            for token in set(_id_pattern().findall(text.upper()))
+            if token not in known]
+
+
+def cross_check(report: str, verdict: EscalationResult,
+                incident: dict | None) -> list[str]:
     """Final gate: report vs the tool's ground truth. Determinable faults only."""
     issues: list[str] = []
-    known = _all_known_ids()
     text = report.upper()
 
     # Fabricated ids
-    for token in set(_id_pattern().findall(text)):
-        if token not in known:
-            issues.append(f"report cites '{token}', which is not in the dataset")
+    issues.extend(_id_scan(report))
 
-    # Every triggered rule must appear in the report
+    # Every triggered rule must appear in the report; the issue text carries
+    # the exact corrective line so the reflection pass can apply it verbatim.
     for rc in verdict.rule_checks:
         if rc.triggered and rc.rule_id not in text:
             if rc.contacts:
@@ -129,6 +139,7 @@ def cross_check(report: str, verdict: EscalationResult, incident: dict | None) -
             ct = rc.contacts[0]
             if rc.rule_id in text and ct.email.upper() not in text:
                 issues.append(f"{rc.rule_id}: contact {ct.name} ({ct.email}) not correctly cited")
+
     # The incident's own facts must appear
     if incident:
         if incident["incident_id"].upper() not in text:
@@ -141,6 +152,7 @@ def cross_check(report: str, verdict: EscalationResult, incident: dict | None) -
 
     return issues
 
+
 def _locked_incident(trace: list[dict]):
     """The current incident the model actually retrieved, or (None, None)."""
     for step in trace:
@@ -150,12 +162,33 @@ def _locked_incident(trace: list[dict]):
                 return result["equipment_id"], result["current_incident"]
     return None, None
 
-def investigate(user_text: str, loop_fn=None) -> InvestigationResult:
+
+def follow_up(question: str, history: list, loop_fn=None) -> tuple[str, list[str]]:
+    """One follow-up turn over an existing investigation session."""
+    loop_fn = loop_fn or (lambda s, u: run_tool_loop(s, u, max_rounds=8,
+                                                     history=history))
+    answer, _ = loop_fn(FOLLOWUP_SYSTEM, question)
+    return answer, _id_scan(answer)
+
+
+def investigate(user_text: str, loop_fn=None,
+                history: list | None = None) -> InvestigationResult:
     """Model-driven investigation, cross-checked against the tool's ground truth,
     with one reflection pass if the cross-check finds fixable issues."""
-    loop_fn = loop_fn or (lambda s, u: run_tool_loop(s, u, max_rounds=12))
+    main_loop = loop_fn or (lambda s, u: run_tool_loop(s, u, max_rounds=12,
+                                                       history=history))
+    # Reflection runs outside the session: repair chatter must not pollute
+    # the follow-up context.
+    fix_loop = loop_fn or (lambda s, u: run_tool_loop(s, u, max_rounds=12))
 
-    report, trace = loop_fn(SYSTEM, user_text)
+    report, trace = main_loop(SYSTEM, user_text)
+
+    if report.lstrip().startswith("## Summary"):
+        # The prompt's not-found template begins with this heading; such a
+        # reply is a clarification even when the equipment lookup succeeded
+        # (e.g. a known tool reporting an unknown alarm).
+        return InvestigationResult(status="needs_clarification",
+                                   clarification=report, tool_trace=trace)
 
     eq_id, incident = _locked_incident(trace)
     if incident is None:
@@ -166,6 +199,8 @@ def investigate(user_text: str, loop_fn=None) -> InvestigationResult:
             tool_trace=trace,
         )
 
+    # The verdict's inputs come from the record the model retrieved — the
+    # record itself, not the model's reading of it.
     verdict = check_escalation(
         equipment_id=eq_id,
         alarm_code=incident["alarm_code"],
@@ -173,10 +208,13 @@ def investigate(user_text: str, loop_fn=None) -> InvestigationResult:
         downtime_minutes=incident["downtime_minutes"],
         affected_lot=incident.get("affected_lot"),
     )
+
     issues = cross_check(report, verdict, incident)
 
     # Reflection: if the cross-check found issues, ask the model to fix only those.
+    reflection_used = False
     if issues:
+        reflection_used = True
         print(f"  [reflection] fixing {len(issues)} issue(s)", file=sys.stderr)
         fix = (
             "Your report has these specific issues:\n"
@@ -186,7 +224,7 @@ def investigate(user_text: str, loop_fn=None) -> InvestigationResult:
             "that was not flagged. Output the full corrected report.\n\n"
             "Original report:\n" + report
         )
-        new_report, trace2 = loop_fn(SYSTEM + "\n\n" + fix, user_text)
+        new_report, trace2 = fix_loop(SYSTEM + "\n\n" + fix, user_text)
         trace += trace2
         new_issues = cross_check(new_report, verdict, incident)
         if new_report.strip() and len(new_issues) < len(issues):
@@ -198,17 +236,17 @@ def investigate(user_text: str, loop_fn=None) -> InvestigationResult:
         escalation=verdict,
         cross_check_issues=issues,
         tool_trace=trace,
+        reflection_used=reflection_used,
     )
 
 
 # Self-check: python -m src.agent live ["incident report"]
+#             python -m src.agent chat ["incident report"]   (with follow-ups)
 if __name__ == "__main__":
-    if len(sys.argv) > 1 and sys.argv[1] == "live":
-        text = sys.argv[2] if len(sys.argv) > 2 else (
-            "Etcher-03 triggered RF Power Instability at 10:35. Tool down for "
-            "45 minutes. Lot LOT1055 running. Similar alarm occurred twice last week."
-        )
-        result = investigate(text)
+    DEFAULT = ("Etcher-03 triggered RF Power Instability at 10:35. Tool down for "
+               "45 minutes. Lot LOT1055 running. Similar alarm occurred twice last week.")
+
+    def _print_result(result):
         print("=== tool calls ===")
         for step in result.tool_trace:
             print(f"  {step['tool']}({step['args']}) ok={step['ok']}")
@@ -224,6 +262,26 @@ if __name__ == "__main__":
                     print(f"  - {issue}")
             else:
                 print("\n=== cross-check: clean ===")
+
+    if len(sys.argv) > 1 and sys.argv[1] == "live":
+        result = investigate(sys.argv[2] if len(sys.argv) > 2 else DEFAULT)
+        _print_result(result)
+        sys.exit(0)
+
+    if len(sys.argv) > 1 and sys.argv[1] == "chat":
+        history: list = []
+        result = investigate(sys.argv[2] if len(sys.argv) > 2 else DEFAULT,
+                             history=history)
+        _print_result(result)
+        while result.status == "report":
+            question = input("\nfollow-up (blank to exit)> ").strip()
+            if not question:
+                break
+            answer, issues = follow_up(question, history)
+            print("\n" + answer)
+            for issue in issues:
+                print(f"  [issue] {issue}")
         sys.exit(0)
 
     print('Run: python -m src.agent live "<incident report>"')
+    print('     python -m src.agent chat "<incident report>"')
