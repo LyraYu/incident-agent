@@ -1,6 +1,9 @@
 venv/
 __pycache__/
+*.pyc
 .env
-*.txt
+.git/
 docs/
 tests/
+tc00*.txt
+eval_results.md

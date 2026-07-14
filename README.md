@@ -1,32 +1,44 @@
 # Incident Investigation Agentic AI Assistant
 
-An agentic AI assistant that helps semiconductor equipment engineers investigate
-machine downtime incidents. It accepts a free-text incident description,
-retrieves evidence from the plant dataset through tool calls, reasons over the
-context with a real LLM (Gemini), and produces a structured investigation
-report with a deterministic escalation verdict.
+An agentic AI assistant that helps semiconductor equipment engineers
+investigate machine downtime incidents. It accepts a free-text incident
+description, retrieves evidence from the plant dataset through tool calls,
+reasons over the context with a real LLM (Gemini), and produces a structured
+investigation report with a deterministic escalation verdict. A finished
+investigation can then be questioned in follow-up turns.
+
+## Design in one paragraph
 
 The LLM runs the whole investigation in a single tool loop — identifying the
 equipment, resolving the alarm, gathering evidence, and writing the report.
-Everything that must be correct is owned by code: a deterministic rule engine
-computes the escalation verdict from five inputs read directly off the incident
-record, a cross-check validates every id and fact in the report against the
-dataset, and one reflection pass fixes only the issues found. Architecture,
-trade-offs, and stress-test data are in the design document.
+Everything that must be correct is owned by code: the escalation verdict is
+computed by a deterministic rule engine whose five inputs are read from the
+incident record itself (never transcribed by the model); a cross-check
+validates every id, escalation contact, and incident fact in the report
+against the dataset; and a single reflection pass asks the model to fix only
+the specific issues found. The result: even under a deliberately weak model,
+errors are absent, auto-repaired, or explicitly visible in
+`cross_check_issues` — never silent. Architecture, trade-offs, and
+stress-test data are in the design document.
 
 ## Project structure
 
 ```
 src/
-  agent.py        # investigation prompt, orchestration, cross-check, reflection
+  agent.py        # investigation prompt, orchestration, cross-check, reflection, follow_up
   tools.py        # 7 dataset tools, incl. the deterministic check_escalation rule engine
   llm_client.py   # Gemini client, tool declarations, manual tool loop, retry logic
   models.py       # typed (pydantic) structures: tool outputs, verdict, report
   data_loader.py  # cached read-only access to the Excel dataset
   config.py       # model + thinking-level configuration
-  api.py          # FastAPI shell over investigate()
+  api.py          # FastAPI shell: investigate, follow-up sessions, report views
 tests/
-  test_agent.py   # offline tests mirroring the five official test cases
+  test_agent.py   # 10 offline tests (official cases, extra scenarios, guardrails)
+eval.py           # live evaluation harness -> eval_results.md
+eval_results.md   # committed evaluation matrix (14/14)
+Dockerfile        # container packaging (one-command startup)
+docs/
+  sample_report_CMP-02.pdf   # a rendered report, printed from the HTML view
 data/
   Incident_Investigation_dataset.xlsx
 requirements.txt
@@ -39,7 +51,7 @@ requirements.txt
 
 ```bash
 python -m venv venv
-venv\Scripts\activate          # Windows   (macOS/Linux: source venv/bin/activate)
+source venv/bin/activate       # Windows: venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
@@ -59,22 +71,25 @@ GEMINI_THINKING_LEVEL = "low"   # Gemini 3.x only; set to None for flash-lite / 
 ```
 
 To switch models, change these two lines. The system was additionally
-stress-tested on `gemini-3.1-flash-lite` (a weaker, cheaper tier) with zero
-silent errors — correctness does not depend on the model tier. See the design
-document for the data.
+stress-tested on the weaker `gemini-3.1-flash-lite` with zero silent errors —
+correctness does not depend on the model tier. See the design document for
+the data.
 
 ## Running
 
 ### CLI
 
 ```bash
+# one-shot investigation
 python -m src.agent live "Etcher-03 triggered RF Power Instability at 10:35. Tool down for 45 minutes. Lot LOT1055 running. Similar alarm occurred twice last week."
+
+# investigation + interactive follow-up questions
+python -m src.agent chat "Etcher-03 is down."
 ```
 
-On Windows, run `set PYTHONUTF8=1` first for clean unicode output.
-
-The output shows the tool-call trace (code-side calls tagged `[code]`), the
-report, and the cross-check result.
+The output shows the tool-call trace, the report, and the cross-check
+result; `chat` then takes follow-up questions (e.g. "What fixed H102 last
+time?") against the same session.
 
 ### REST API
 
@@ -82,8 +97,15 @@ report, and the cross-check result.
 uvicorn src.api:app --port 8000
 ```
 
-- Interactive docs (try requests in the browser): http://localhost:8000/docs
-- Health check: `GET /health`
+Interactive docs at http://localhost:8000/docs. Endpoints:
+
+| Endpoint | Purpose |
+|---|---|
+| `POST /investigate` | full structured result: report, verdict, cross-check, trace, `session_id` |
+| `POST /follow_up` | ask a question about a previous session (`session_id` + `question`) |
+| `POST /investigate/report` | plain-text report only |
+| `GET /report/demo?text=...` | rendered HTML report, open directly in a browser |
+| `GET /health` | health check |
 
 ```bash
 curl -X POST http://localhost:8000/investigate \
@@ -91,27 +113,47 @@ curl -X POST http://localhost:8000/investigate \
   -d "{\"text\": \"CMP-02 pressure alarm. Downtime 18 minutes. Lot LOT1056.\"}"
 ```
 
-The response is the full `InvestigationResult`: report, escalation verdict,
-cross-check findings, and the complete tool trace.
+Input is validated (1–2000 chars; empty or oversized text returns 422). A
+sample rendered report is included at `docs/sample_report_CMP-02.pdf`.
 
-## Sample prompts (the five official test cases)
+### Docker
 
-| # | Input | Expected behaviour |
-|---|-------|--------------------|
-| TC001 | `Etcher-03 triggered RF Power Instability at 10:35. Tool down for 45 minutes. Lot LOT1055 running. Similar alarm occurred twice last week.` | Retrieves EQ001 / RF101 / H101–H103 / SOP001; full escalation (R001–R005); corrects "twice" to the recorded three prior occurrences |
-| TC002 | `CMP-02 pressure alarm. Downtime 18 minutes. Lot LOT1056.` | Infers CMP205 from the vague wording; notifies the Manufacturing Supervisor only (R005) — no over-escalation |
-| TC003 | `CVD-05 has gas flow deviation, MFC actual flow below setpoint. Downtime 35 min.` | Retrieves GAS012 context; escalates on downtime (R001) and High severity (R003) |
-| TC004 | `Litho-01 alignment failure for lot LOT1058, downtime 12 min.` | Avoids over-escalation (R005 only); recommends camera clean / calibration per SOP008 |
-| TC005 | `Unknown tool ALPHA-99 has alarm ZX999.` | Stops after the failed lookup and asks the user to verify the equipment name — no fabrication |
+```bash
+docker build -t incident-agent .
+docker run -p 8000:8000 --env-file .env incident-agent
+```
+
+Same API at http://localhost:8000. The key is injected at runtime via
+`--env-file` and is never baked into the image.
+
+## Test scenarios
+
+The assignment's four required scenarios map to the cases below; all are
+exercised by both the offline tests and the live evaluation.
+
+| Scenario | Case | Input | Expected behaviour |
+|---|---|---|---|
+| Normal investigation | TC001 | `Etcher-03 triggered RF Power Instability at 10:35. Tool down for 45 minutes. Lot LOT1055 running. Similar alarm occurred twice last week.` | Full report; surfaces all three prior occurrences (H101–H103) with dates; escalates R001–R005 |
+| Ambiguous alarm | TC002 | `CMP-02 pressure alarm. Downtime 18 minutes. Lot LOT1056.` | Infers CMP205 from the wording; notifies Manufacturing Supervisor only (R005) |
+| Repeated incident | TC001 / TC002 | (as above) | Recurrence counted by the rule engine, self-labeled "including the current incident" |
+| High severity + downtime | TC003 | `CVD-05 has gas flow deviation, MFC actual flow below setpoint. Downtime 35 min.` | Escalates on downtime (R001) and High severity (R003) |
+| Over-escalation guard | TC004 | `Litho-01 alignment failure for lot LOT1058, downtime 12 min.` | R005 only; recommends camera clean / calibration per SOP008 |
+| Unknown equipment | TC005 | `Unknown tool ALPHA-99 has alarm ZX999.` | Stops after the failed lookup; asks the user to verify — no fabrication |
+| Unknown alarm, known equipment | CUST-A | `Etcher-03 reports alarm XYZ888, downtime 20 minutes.` | Proceeds on the incident record's real code and states the correction explicitly, naming both codes |
+| Missing information | CUST-B | `Etcher-03 is down.` | Full correct report — every fact recovered from the incident record |
 
 ## Testing
 
 ```bash
-pytest -q                    # offline tests mirroring TC001–TC005 (no API key needed)
-python -m src.llm_client     # offline self-check of the tool loop (no API key needed)
+pytest -q                    # 10 offline tests, no API key, ~4 s
+python eval.py               # live evaluation, all 7 cases -> eval_results.md
+python eval.py --runs 3      # stability check
+python -m src.llm_client     # offline self-check of the tool loop
 ```
 
-Live end-to-end runs use the CLI command above (API key required).
+The committed `eval_results.md` shows the current matrix: **14/14 passed**
+(two runs per case), scored deterministically on status, exact escalation
+rule set, required citations, shipped issues, and fabricated ids.
 
 ## How correctness is guaranteed
 
@@ -124,17 +166,19 @@ Live end-to-end runs use the CLI command above (API key required).
 - **Reflection.** If the cross-check finds issues, the model is asked once to
   fix exactly those issues; the fix is adopted only if it is non-empty and
   strictly reduces the issue count.
-- **Honest failure paths.** Unknown equipment or alarm produces a clarification
-  request, and any unresolved issues ship visibly in `cross_check_issues`.
+- **Honest failure paths.** Unknown equipment produces a clarification
+  request, follow-up answers pass the same fabricated-id scan as reports, and
+  any unresolved issues ship visibly in `cross_check_issues`.
 
 ## Notes and limitations
 
 - `gemini-3-flash-preview` is a preview model; under load Google may return
   503s. The client retries with backoff automatically; switching to the GA
-  `gemini-3.1-flash-lite` (one line in `config.py`) avoids this.
+  `gemini-3.1-flash-lite` (one line in `config.py`) avoids this entirely.
+- Follow-up sessions are held in process memory; a production deployment
+  would externalize the store and add expiry.
 - Some maintenance records in the dataset post-date the incidents; they are
-  returned as-is and this is documented as an assumption in the design
-  document.
+  returned as-is and documented as an assumption in the design document.
 - Prose wording inside the analysis sections is the model's responsibility;
   identifiers, escalation facts, and the verdict are guarded by code. See the
   design document's limitations section for examples.

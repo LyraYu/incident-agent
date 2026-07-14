@@ -44,7 +44,9 @@ presents the test data behind this claim.
 | `api.py` | FastAPI shell over `investigate()` |
 
 The CLI and the REST API are both thin shells over the same `investigate()`
-function, so every test result applies to both interfaces.
+function, so every test result applies to both interfaces. The service also
+ships with a Dockerfile for one-command startup; the venv path remains the
+development workflow.
 
 ## 2. Agent workflow and orchestration
 
@@ -73,12 +75,27 @@ After the loop, code takes over in four steps:
    non-empty and strictly reduces the issue count; otherwise the original
    ships with its issues visible in `cross_check_issues`.
 
-If the equipment or its incident cannot be found, the pipeline stops before
-any verdict and returns a clarification request instead of a report (TC005).
+Two kinds of "unknown" get two different treatments. An unknown equipment
+blocks the investigation — the pipeline stops before any verdict and returns
+a clarification request (TC005). An unknown alarm code on a known equipment
+does not: the incident record already holds the real code, so the
+investigation proceeds on the record and the report states the correction
+explicitly, naming both the code the user gave and the code the record shows
+(evaluation case CUST-A). Only when there is no incident record to fall back
+on does an unidentified alarm produce a clarification request.
 
-The tool trace records every call, with code-side calls tagged `[code]`, so a
-reviewer can see exactly which steps were the model's and which were the
-orchestrator's.
+A finished investigation can be questioned. `follow_up()` continues the same
+model conversation (the tool loop keeps its history when given one), with the
+read tools available and the answer passed through the same fabricated-id
+scan as the report. The reflection pass deliberately runs outside this
+history, so repair chatter never pollutes the follow-up context. The REST API
+exposes this as a `session_id` on each investigation and a `/follow_up`
+endpoint; the CLI as an interactive `chat` mode. Sessions are held in
+process memory — a production deployment would externalize the store and add
+expiry.
+
+The tool trace records every call the model made, so a reviewer can replay
+exactly how the evidence was gathered.
 
 ## 3. Tool design
 
@@ -131,8 +148,14 @@ layout, and grounding rules.
   removes the degrees of freedom in which fabrication happens — a model that
   may only echo tool data or write `None` has nowhere to invent a contact.
 - **Records beat the user.** If the user's account conflicts with the data
-  (a different time, or "twice last week" against three recorded
-  occurrences), the prompt requires an explicit correction using the records.
+  (a different time, a non-existent alarm code, or "twice last week" against
+  three recorded occurrences), the prompt requires an explicit correction
+  using the records.
+- **Ambiguity is removed at the data source, not policed downstream.** The
+  rule engine's recurrence counts are self-labeling — its output strings say
+  "including the current incident" — so any count the model quotes carries
+  its own frame of reference. This retired a whole class of "3 vs 4"
+  wording drift without adding a single check.
 - **Repair instructions carry the answer.** When the cross-check flags a
   missing escalation line, the issue text includes the exact corrective line.
   The reflection pass then performs a mechanical substitution instead of a
@@ -170,6 +193,30 @@ stress-tested on the weaker `gemini-3.1-flash-lite` with zero silent errors
 (section 6); switching models is a two-line change in `config.py`. For
 production, this means the model tier can be chosen on cost alone.
 
+**E. Follow-up memory reuses the investigation's own conversation.** Rather
+than a separate memory subsystem, the tool loop simply keeps its message
+history when handed a list, and `follow_up()` continues it. One design rule
+protects the deliverable: the report and verdict are final — follow-ups may
+query and explain, and the prompt instructs the model to decline requests to
+revise the verdict, pointing to the rule engine. Answers pass the same
+fabricated-id scan as reports.
+
+**Enhancements considered and declined.** Vector search: the dataset is
+small and fully structured; exact lookups are already correct, and embedding
+retrieval on thirteen small sheets would add an approximation layer where
+none is needed. Its entry condition is stated in the roadmap below.
+
+**Production roadmap.** The natural next step is closing the knowledge loop:
+when an investigation is resolved, write the confirmed root cause and
+corrective action back into `incident_history` — drafted by the agent,
+committed only after an engineer signs off. The write path would mirror the
+system's core rule (the model drafts, deterministic gates guard, a human
+approves) so the knowledge base cannot be polluted by an unreviewed model
+output. Once that loop accumulates history at scale, two deferred items earn
+their place: semantic search over past investigations (engineers asking "how
+was that vibration issue fixed" in natural language), and an externalized
+session store with expiry.
+
 **Assumptions**
 
 - `current_incidents` is the system of record. User-supplied values that
@@ -187,40 +234,50 @@ production, this means the model tier can be chosen on cost alone.
 
 - The cross-check guards identifiers, escalation facts, and the verdict. It
   does not parse prose semantics: in batch logs the model occasionally
-  attaches a wrong time window to a list of (real) incident ids, over-reads
-  in-range sensor noise, or words the repeat-occurrence header inconsistently
-  when an alarm has history outside the 30-day window. These do not affect
-  the verdict or the recommended actions, and adding prose-level checks was
-  judged not worth the complexity.
+  attaches a wrong time window to a list of (real) incident ids (e.g.
+  counting a 7-week-old incident inside "the last 30 days"), slips a year in
+  a date (2024 for 2026), or over-reads in-range sensor noise as a signal.
+  Observed in well under 10% of runs, never affecting the verdict or the
+  recommended actions; prose-level semantic checks were judged not worth the
+  complexity.
 - The fabricated-id scan only recognizes id prefixes that exist in the
   dataset; an invented id with a novel prefix passes the scan (it is still
   caught by the contact-email check when it appears in an escalation line).
+  Symmetrically, a user-supplied wrong code that reuses a known prefix (say
+  RF999) would be flagged by the scan even when the report cites it only to
+  correct it — a visible false alarm, never a silent one.
 
 ## 6. Testing and reliability evidence
 
-**Offline tests** (`pytest -q`, no API key, ~1 s): the five official test
-cases TC001–TC005 asserted on verdict rule sets, escalation semantics, and a
-clean cross-check, plus two guardrail tests that pin the safety net itself —
-a report missing a triggered rule must be flagged with the exact corrective
-line, and the reflection pass must repair it.
+**Offline tests** (`pytest -q`, no API key, ~4 s): ten tests — the five
+official cases asserted on verdict rule sets, escalation semantics, and a
+clean cross-check; the two additional scenarios (unknown alarm, minimal
+input); a follow-up answer scan; and two guardrail tests that pin the safety
+net itself — a report missing a triggered rule must be flagged with the
+exact corrective line, and the reflection pass must repair it.
 
-**Live batches.** The same five inputs were run repeatedly against two model
-tiers with identical code and prompts:
+**Live evaluation** (`python eval.py`): every case — official five plus the
+two additional scenarios — run against the real model and scored
+deterministically (status, exact escalation rule set, required citations,
+shipped issues, fabricated ids). The committed `eval_results.md` shows
+**14/14 passed** at two runs per case; a reviewer can regenerate it with one
+command.
+
+**Stress batches.** The same inputs were also run repeatedly against two
+model tiers with identical code and prompts:
 
 | | `gemini-3.1-flash-lite` (stress) | `gemini-3-flash-preview` (default) |
 |---|---|---|
-| runs | 30+ (TC004 focus) | 50 (TC001–TC005, 10 each) |
+| runs | 30+ (TC004 focus) | 50+ (all cases) |
 | model omits a verdict parameter | ~50% of runs | 0 |
 | silent wrong reports | **0** | 0 |
-| flagged and auto-repaired | all flagged runs (final batch) | 1 run (TC003, repaired to clean) |
 | final report correct | 100% | 100% |
 
-The lite runs are the stress case: even with the model dropping a required
-fact in half of all runs, no error shipped silently — every fault was either
-repaired by reflection or visible in `cross_check_issues`. The preview runs
-show the submission configuration across all five official cases with the
-safety net almost entirely idle: one flagged run out of fifty, repaired on
-the spot.
+The lite runs are the point: even with the model dropping a required fact in
+half of all runs, no error shipped silently — every fault was either
+repaired by the reflection pass on the spot or visible in
+`cross_check_issues`. Under the submission model the safety net is almost
+entirely idle.
 
 Live outputs were verified field-by-field against the dataset (sensor values,
 engineer ids and emails, history ids and dates, maintenance records, SOP
