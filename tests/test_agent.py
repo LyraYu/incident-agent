@@ -1,4 +1,5 @@
-"""Sample tests: the five official test cases (TC001-TC005) from the dataset.
+"""Sample tests: the five official test cases (TC001-TC005) from the dataset,
+plus guardrail tests for the safety net and the clarification paths.
 
 Each test feeds a fake loop (a canned model report + tool trace built from the
 real tools) so the checks exercise the agent's own logic — verdict routing,
@@ -8,9 +9,10 @@ The canned reports are minimal cross_check-clean reports: every triggered
 rule with its contact email, plus the incident's own facts. They double as
 documentation of what the cross-check requires.
 
-The final section pins the safety net itself: the cross-check must flag a
-report that omits a triggered rule (with the exact corrective line), and the
-reflection pass must repair it.
+The final section pins the safety net and the clarification routing: the
+cross-check must flag a report that omits a triggered rule (with the exact
+corrective line), the reflection pass must repair it, and a reply in the
+not-found template must route to clarification.
 """
 
 from src.agent import cross_check, follow_up, investigate
@@ -162,7 +164,9 @@ def test_reflection_repairs_flagged_report():
     assert "Emily Ng" in history[-1].parts[0].text   # final report entered the session
 
 
-def test_unknown_alarm_on_known_equipment_clarifies():
+def test_summary_reply_routes_to_clarification_even_with_locked_incident():
+    """A reply in the not-found template is a clarification even when the
+    equipment lookup succeeded and an incident was locked."""
     trace = [_eq_step("Etcher-03")]   # equipment found, incident locked
     report = ("## Summary — what could not be found.\n"
               "Alarm XYZ888 is not a known alarm code.\n"

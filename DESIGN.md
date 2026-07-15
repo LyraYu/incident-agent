@@ -1,5 +1,7 @@
 # Design Document — Incident Investigation Agentic AI Assistant
 
+Yu Yue · July 2026
+
 This system helps equipment engineers investigate machine downtime. It takes a
 free-text incident description, gathers evidence from the plant dataset
 through tool calls, and produces a structured investigation report with an
@@ -41,11 +43,13 @@ presents the test data behind this claim.
 | `tools.py` | 7 dataset tools, including the deterministic escalation rule engine |
 | `llm_client.py` | Gemini client, tool declarations, manual tool loop, retry |
 | `models.py` | pydantic models for tool outputs, verdict, and the final result |
+| `data_loader.py` | loads the Excel workbook once, cached and read-only |
+| `config.py` | model and data-path configuration |
 | `api.py` | FastAPI shell over `investigate()` |
 | `ui.py` | engineer-facing web page: investigate and follow up in one place |
 
-The web UI, the CLI and the REST API are all thin shells over the same
-`investigate()` function, so every test result applies to all three
+The web page (`/ui`), the CLI and the REST API are all thin shells over the
+same `investigate()` function, so every test result applies to all three
 interfaces. The service also ships with a Dockerfile for one-command
 startup; the venv path remains the development workflow.
 
@@ -57,7 +61,8 @@ gather evidence (similar incidents, maintenance, sensor readings, SOP), call
 `check_escalation`, and write the report in a fixed layout. Keeping
 everything in one loop means the evidence stays in the model's context while
 it writes — the report is grounded in tool results the model has just seen,
-and each investigation costs exactly one model conversation.
+and each investigation normally costs one model conversation; a reflection
+pass, when needed, adds a second (section 5, decision C).
 
 After the loop, code takes over in four steps:
 
@@ -76,14 +81,17 @@ After the loop, code takes over in four steps:
    non-empty and strictly reduces the issue count; otherwise the original
    ships with its issues visible in `cross_check_issues`.
 
-Two kinds of "unknown" get two different treatments. An unknown equipment
-blocks the investigation — the pipeline stops before any verdict and returns
-a clarification request (TC005). An unknown alarm code on a known equipment
-does not: the incident record already holds the real code, so the
-investigation proceeds on the record and the report states the correction
-explicitly, naming both the code the user gave and the code the record shows
-(evaluation case CUST-A). Only when there is no incident record to fall back
-on does an unidentified alarm produce a clarification request.
+Not every investigation ends in a report — the loop can also return a
+clarification request, and the routing depends on what exactly is unknown.
+An unknown equipment blocks the investigation: the pipeline stops before any
+verdict and asks the user to verify the name (TC005). A known equipment with
+no open incident also stops — the system asks for the incident details
+rather than inventing them (CUST-C). An unknown alarm code on a known
+equipment does not stop: the incident record already holds the real code, so
+the investigation proceeds on the record and states the correction
+explicitly, naming both codes (CUST-A). Only when there is no incident
+record to fall back on does an unidentified alarm produce a clarification
+request.
 
 A finished investigation can be questioned. `follow_up()` continues the same
 model conversation (the tool loop keeps its history when given one), with the
@@ -91,11 +99,11 @@ read tools available and the answer passed through the same fabricated-id
 scan as the report. The reflection pass deliberately runs outside this
 history, so repair chatter never pollutes the follow-up context. The REST API
 exposes this as a `session_id` on each investigation and a `/follow_up`
-endpoint; the CLI as an interactive `chat` mode. Sessions are held in
-process memory — a production deployment would externalize the store and add
-expiry.
+endpoint; the CLI as an interactive `chat` mode; the web page as a follow-up
+box under the report. Sessions are held in process memory — a production
+deployment would externalize the store and add expiry.
 
-The tool trace records every call the model made, so a reviewer can replay
+The tool trace records every call the model made, so a reviewer can see
 exactly how the evidence was gathered.
 
 ## 3. Tool design
@@ -112,9 +120,9 @@ exactly how the evidence was gathered.
 
 Three designs carry most of the weight:
 
-**The incident travels with the equipment.** `get_equipment_details` joins
-the open incident into its result, so one call establishes every fact the
-investigation depends on: the real incident id, timestamp, downtime, and
+**The equipment lookup includes the open incident.** `get_equipment_details`
+joins the open incident into its result, so one call establishes every fact
+the investigation depends on: the real incident id, timestamp, downtime, and
 affected lot. The model never assembles these from separate lookups, and the
 orchestrator reads the verdict inputs from this same record.
 
@@ -139,25 +147,25 @@ call never crashes the loop.
 The system prompt has three parts: a numbered procedure, an exact report
 layout, and grounding rules.
 
-- **Procedure over persona.** The prompt spends its budget on ordered steps
+- **The prompt is a procedure.** It spends its budget on ordered steps
   and extraction targets, not on role descriptions. Each step names the tool
   to use and what to carry forward.
-- **Exact output shapes.** The escalation list format is specified down to
-  the line: role, name, engineer id, email copied verbatim from the tool
-  result. If no rule triggered, the model must write exactly `None` and is
-  forbidden from discussing untriggered rules. Constraining the shape also
+- **The output format is exact.** The escalation list format is specified
+  down to the line: role, name, engineer id, email copied verbatim from the
+  tool result. If no rule triggered, the model must write exactly `None` and
+  is forbidden from discussing untriggered rules. Constraining the shape also
   removes the degrees of freedom in which fabrication happens — a model that
   may only echo tool data or write `None` has nowhere to invent a contact.
-- **Records beat the user.** If the user's account conflicts with the data
-  (a different time, a non-existent alarm code, or "twice last week" against
-  three recorded occurrences), the prompt requires an explicit correction
-  using the records.
-- **Ambiguity is removed at the data source, not policed downstream.** The
-  rule engine's recurrence counts are self-labeling — its output strings say
-  "including the current incident" — so any count the model quotes carries
-  its own frame of reference. This retired a whole class of "3 vs 4"
-  wording drift without adding a single check.
-- **Repair instructions carry the answer.** When the cross-check flags a
+- **When the user and the records disagree, the records win.** If the user's
+  account conflicts with the data (a different time, a non-existent alarm
+  code, or "twice last week" against three recorded occurrences), the prompt
+  requires an explicit correction using the records.
+- **The counts say what they include.** The rule engine's recurrence counts
+  are self-labeling — its output strings say "including the current
+  incident" — so any count the model quotes carries its own frame of
+  reference. This removed the "3 vs 4" wording drift without adding a single
+  check.
+- **The error message contains the fix.** When the cross-check flags a
   missing escalation line, the issue text includes the exact corrective line.
   The reflection pass then performs a mechanical substitution instead of a
   new investigation — in testing this took the repair rate from partial to
@@ -175,24 +183,25 @@ silently drops a notification rule. With the verdict computed from the
 record, the same fault is caught by the cross-check and repaired.
 
 **B. The cross-check tests only determinable faults.** Four checks, each with
-a ground truth: (1) every id cited in the report exists in the dataset — the
-id pattern is derived from the data, not hand-listed, so new id families are
-covered automatically; (2) every triggered rule appears in the report;
-(3) each cited rule carries the correct contact email; (4) the incident's own
-id, alarm code, and lot appear. Prose wording is deliberately out of scope
-(see Limitations).
+a ground truth: (1) every id cited in the report exists in the dataset; the
+prefix pattern is derived from the dataset's own ids rather than hand-listed,
+so a new prefix appearing in the data is covered without a code change;
+(2) every triggered rule appears in the report; (3) each cited rule carries
+the correct contact email; (4) the incident's own id, alarm code, and lot
+appear. Prose wording is deliberately out of scope (see Limitations).
 
-**C. Reflection is bounded and verified.** One pass, fix-only-what-was-
+**C. Reflection is bounded and verified.** One pass that fixes only what was
 flagged, adopted only if the issue count strictly decreases. This keeps the
 worst-case cost at two model conversations and makes failure honest: a report
 that could not be repaired ships with its issues visible rather than being
 retried indefinitely.
 
-**D. Model choice is a configuration, not a dependency.** The submission
+**D. Correctness does not depend on the model tier.** The submission
 default is `gemini-3-flash-preview` (thinking level `low`). The same code was
 stress-tested on the weaker `gemini-3.1-flash-lite` with zero silent errors
 (section 6); switching models is a two-line change in `config.py`. For
-production, this means the model tier can be chosen on cost alone.
+production, this means the model tier can be chosen on cost without risking
+correctness.
 
 **E. Follow-up memory reuses the investigation's own conversation.** Rather
 than a separate memory subsystem, the tool loop simply keeps its message
@@ -202,21 +211,31 @@ query and explain, and the prompt instructs the model to decline requests to
 revise the verdict, pointing to the rule engine. Answers pass the same
 fabricated-id scan as reports.
 
-**Enhancements considered and declined.** Vector search: the dataset is
-small and fully structured; exact lookups are already correct, and embedding
-retrieval on thirteen small sheets would add an approximation layer where
-none is needed. Its entry condition is stated in the roadmap below.
+**Enhancements considered and declined.** Multi-agent decomposition,
+streaming, and vector search were all considered. On this task, each costs
+more than it returns.
 
-**Production roadmap.** The natural next step is closing the knowledge loop:
-when an investigation is resolved, write the confirmed root cause and
-corrective action back into `incident_history` — drafted by the agent,
-committed only after an engineer signs off. The write path would mirror the
-system's core rule (the model drafts, deterministic gates guard, a human
-approves) so the knowledge base cannot be polluted by an unreviewed model
-output. Once that loop accumulates history at scale, two deferred items earn
-their place: semantic search over past investigations (engineers asking "how
-was that vibration issue fixed" in natural language), and an externalized
-session store with expiry.
+- *Multi-agent decomposition* splits the investigation across several agents.
+  Every step here depends on the previous one, so there is little parallelism
+  to win. The split would only add handoffs and more prompts to maintain.
+- *Streaming* sends text to the engineer while it is being generated. Here
+  the report must first pass the cross-check and, when needed, the reflection
+  repair. Streaming would show a draft before verification, and a correction
+  would arrive after the engineer had already read the wrong version.
+- *Vector search* replaces exact lookups with similarity search. On thirteen
+  small, fully structured sheets the exact lookups are already complete and
+  correct, so an embedding index adds a dependency and swaps exact matching
+  for approximation. The roadmap below says when that changes.
+
+**Production roadmap.** When an investigation is resolved, its confirmed
+root cause and corrective action should flow back into `incident_history` —
+drafted by the agent, committed only after an engineer signs off. The write
+path would mirror the system's core rule (the model drafts, deterministic
+gates guard, a human approves) so the knowledge base cannot be polluted by an
+unreviewed model output. Once that loop accumulates history at scale, two
+deferred items become worth building: semantic search over past
+investigations (engineers asking "how was that vibration issue fixed" in
+natural language), and an externalized session store with expiry.
 
 **Assumptions**
 
@@ -275,7 +294,7 @@ command.
 | self-repaired by reflection | 5 runs | 0 |
 | failures (all visible in the matrix) | 4 × missing explicit-correction phrasing (CUST-A) | — |
 
-The failure taxonomy is the point: across all eighty scored runs, every
+What failed matters more than how many: across all eighty scored runs, every
 failure was a prose-level citation obligation — precisely localized by the
 scorer — and none touched the deterministic layer. The verdict, the
 escalation contacts, and every cited identifier were correct in all 80 runs.

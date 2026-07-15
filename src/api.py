@@ -8,7 +8,7 @@ import uuid
 import markdown
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import HTMLResponse, PlainTextResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 
 from src.agent import follow_up, investigate
 from src.models import InvestigationResult
@@ -16,19 +16,6 @@ from src.ui import SESSIONS, FollowUpRequest, IncidentRequest, router as ui_rout
 
 app = FastAPI(title="Incident Investigation Agent")
 app.include_router(ui_router)
-
-# In-memory, single-process session store; a production deployment would
-# externalize this (e.g. Redis) and add expiry.
-SESSIONS: dict[str, list] = {}
-
-
-class IncidentRequest(BaseModel):
-    text: str = Field(min_length=1, max_length=2000)
-
-
-class FollowUpRequest(BaseModel):
-    session_id: str
-    question: str = Field(min_length=1, max_length=2000)
 
 
 class FollowUpResponse(BaseModel):

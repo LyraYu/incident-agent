@@ -18,6 +18,7 @@ class AlarmDetail(BaseModel):
     probable_causes: list[str]
     applicable_tool_type: str
 
+
 class CurrentIncident(BaseModel):
     """The open incident on a piece of equipment right now, from current_incidents."""
     incident_id: str
@@ -28,7 +29,9 @@ class CurrentIncident(BaseModel):
     affected_lot: str | None = None
     status: str
 
+
 class EquipmentDetail(BaseModel):
+    """One equipment row joined with its current incident, from equipment_master."""
     equipment_id: str
     equipment_name: str
     tool_type: str
@@ -41,6 +44,7 @@ class EquipmentDetail(BaseModel):
     process_area: str
     primary_engineer_id: str
     current_incident: CurrentIncident | None = None
+
 
 class SopDetail(BaseModel):
     """One standard operating procedure, from sop_knowledge_base."""

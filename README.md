@@ -34,9 +34,11 @@ src/
   api.py          # FastAPI shell: investigate, follow-up sessions, report views
   ui.py           # engineer-facing web page (investigate + follow-up in one place)
 tests/
-  test_agent.py   # 10 offline tests (official cases, extra scenarios, guardrails)
+  test_agent.py   # 12 offline tests (official cases, extra scenarios, guardrails)
 eval.py           # live evaluation harness -> eval_results.md
-eval_results.md   # committed evaluation matrix (14/14)
+eval_results.md   # committed evaluation matrix (default tier, 40/40)
+eval_results_flashlite.md   # stress-tier matrix (36/40)
+DESIGN.md         # design document (submitted as DESIGN.docx)
 Dockerfile        # container packaging (one-command startup)
 docs/
   sample_report_CMP-02.pdf   # a rendered report, printed from the HTML view
@@ -131,25 +133,25 @@ Same API at http://localhost:8000. The key is injected at runtime via
 
 ## Test scenarios
 
-The assignment's four required scenarios map to the cases below; all are
-exercised by both the offline tests and the live evaluation.
+Each case below is tested via both the offline tests and the live evaluation.
 
 | Scenario | Case | Input | Expected behaviour |
 |---|---|---|---|
 | Normal investigation | TC001 | `Etcher-03 triggered RF Power Instability at 10:35. Tool down for 45 minutes. Lot LOT1055 running. Similar alarm occurred twice last week.` | Full report; surfaces all three prior occurrences (H101–H103) with dates; escalates R001–R005 |
 | Ambiguous alarm | TC002 | `CMP-02 pressure alarm. Downtime 18 minutes. Lot LOT1056.` | Infers CMP205 from the wording; notifies Manufacturing Supervisor only (R005) |
-| Repeated incident | TC001 / TC002 | (as above) | Recurrence counted by the rule engine, self-labeled "including the current incident" |
+| Repeated incident | TC001 / TC002 | (as above) | TC001 recurs within 7 days and escalates (R002, R004); TC002 has one prior in 30 days — flagged as a repeat, nothing over-escalated |
 | High severity + downtime | TC003 | `CVD-05 has gas flow deviation, MFC actual flow below setpoint. Downtime 35 min.` | Escalates on downtime (R001) and High severity (R003) |
 | Over-escalation guard | TC004 | `Litho-01 alignment failure for lot LOT1058, downtime 12 min.` | R005 only; recommends camera clean / calibration per SOP008 |
 | Unknown equipment | TC005 | `Unknown tool ALPHA-99 has alarm ZX999.` | Stops after the failed lookup; asks the user to verify — no fabrication |
 | Unknown alarm, known equipment | CUST-A | `Etcher-03 reports alarm XYZ888, downtime 20 minutes.` | Proceeds on the incident record's real code and states the correction explicitly, naming both codes |
 | Missing information | CUST-B | `Etcher-03 is down.` | Full correct report — every fact recovered from the incident record |
+| Known equipment, no open incident | CUST-C | `Diffusion-02 pump making abnormal noise, please investigate.` | Asks for the incident details — nothing invented |
 
 ## Testing
 
 ```bash
 pytest -q                    # 12 offline tests, no API key, ~5 s
-python eval.py               # live evaluation, all 7 cases -> eval_results.md
+python eval.py               # live evaluation, all 8 cases -> eval_results.md
 python eval.py --runs 3      # stability check
 python -m src.llm_client     # offline self-check of the tool loop
 ```

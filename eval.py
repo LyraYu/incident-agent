@@ -3,10 +3,11 @@ Live evaluation: run every test case against the real model and score the
 results deterministically.
 
 Cases: the official five from the dataset's test_cases sheet (inputs read
-from the sheet, never retyped) plus two additional scenarios covering
+from the sheet, never retyped) plus three additional scenarios covering
 assignment requirements the official cases leave untouched — an unknown
-alarm on a known equipment, and a minimal-information report recovered
-entirely from the incident record.
+alarm on a known equipment, a minimal-information report recovered
+entirely from the incident record, and a known equipment with no open
+incident.
 
 Scored per run: result status, exact set of triggered escalation rules,
 required citations present, shipped cross-check issues, fabricated ids,

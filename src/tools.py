@@ -90,17 +90,30 @@ def _current_incident(equipment_id):
     )
 
 
-def get_equipment_details(identifier):
-    df = get_sheets()["equipment_master"]; key = identifier.strip().upper()
+def get_equipment_details(identifier: str) -> EquipmentDetail | None:
+    """Look up one equipment by id or name, joined with its current incident."""
+    df = get_sheets()["equipment_master"]
+    key = identifier.strip().upper()
     hit = df[df["equipment_id"].str.upper() == key]
-    if hit.empty: hit = df[df["equipment_name"].str.upper() == key]
-    if hit.empty: return None
+    if hit.empty:
+        hit = df[df["equipment_name"].str.upper() == key]
+    if hit.empty:
+        return None
     row = hit.iloc[0]
-    return EquipmentDetail(equipment_id=row["equipment_id"], equipment_name=row["equipment_name"],
-        tool_type=row["tool_type"], line=row["line"], bay=row["bay"], vendor=row["vendor"],
-        model=row["model"], install_year=int(row["install_year"]), status=row["status"],
-        process_area=row["process_area"], primary_engineer_id=row["primary_engineer_id"],
-        current_incident=_current_incident(row["equipment_id"]))
+    return EquipmentDetail(
+        equipment_id=row["equipment_id"],
+        equipment_name=row["equipment_name"],
+        tool_type=row["tool_type"],
+        line=row["line"],
+        bay=row["bay"],
+        vendor=row["vendor"],
+        model=row["model"],
+        install_year=int(row["install_year"]),
+        status=row["status"],
+        process_area=row["process_area"],
+        primary_engineer_id=row["primary_engineer_id"],
+        current_incident=_current_incident(row["equipment_id"]),
+    )
 
 
 def get_sop(alarm_code: str) -> SopDetail | None:
@@ -272,7 +285,8 @@ def _evaluate_rules(
         RuleCheck(
             rule_id="R002",
             condition="same alarm on same equipment >= 2 times within 7 days",
-            observed=f"{count_7d} occurrence(s) in the 7-day window, including the current incident",            triggered=count_7d >= 2,
+            observed=f"{count_7d} occurrence(s) in the 7-day window, including the current incident",
+            triggered=count_7d >= 2,
             level="escalate",
             target_role="Engineering Manager",
         ),

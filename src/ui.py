@@ -5,15 +5,15 @@ step, no frontend framework, no new dependencies. All logic stays in
 investigate()/follow_up(); this file only renders.
 """
 
-import markdown
+import html
 import uuid
 
+import markdown
 from fastapi import APIRouter
 from fastapi.responses import HTMLResponse
+from pydantic import BaseModel, Field
 
 from src.agent import follow_up, investigate
-
-from pydantic import BaseModel, Field
 
 # In-memory, single-process session store; a production deployment would
 # externalize this (e.g. Redis) and add expiry. Shared by the REST API.
@@ -27,6 +27,7 @@ class IncidentRequest(BaseModel):
 class FollowUpRequest(BaseModel):
     session_id: str
     question: str = Field(min_length=1, max_length=2000)
+
 
 router = APIRouter()
 
@@ -62,12 +63,12 @@ _FOLLOWUP_FORM = """
 
 
 def _card(md_text: str, issues: list[str] | None = None) -> str:
-    html = markdown.markdown(md_text, extensions=["nl2br"])
+    rendered = markdown.markdown(md_text, extensions=["nl2br"])
     tail = ""
     if issues:
         items = "".join(f"<li>{i}</li>" for i in issues)
         tail = f"<p class='issues'>Cross-check issues:</p><ul class='issues'>{items}</ul>"
-    return f"<div class='card'>{html}{tail}</div>"
+    return f"<div class='card'>{rendered}{tail}</div>"
 
 
 @router.get("/ui", response_class=HTMLResponse)
@@ -79,12 +80,13 @@ def ui_home(text: str = "") -> str:
     history: list = []
     result = investigate(req.text, history=history)
     if result.status == "needs_clarification":
-        return _PAGE.format(text=req.text, body=_card(result.clarification))
+        return _PAGE.format(text=html.escape(req.text),
+                            body=_card(result.clarification))
     sid = str(uuid.uuid4())
     SESSIONS[sid] = history
     body = (_card(result.report, result.cross_check_issues)
             + _FOLLOWUP_FORM.format(sid=sid))
-    return _PAGE.format(text=req.text, body=body)
+    return _PAGE.format(text=html.escape(req.text), body=body)
 
 
 @router.get("/ui/follow_up", response_class=HTMLResponse)
