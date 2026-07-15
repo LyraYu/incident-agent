@@ -42,4 +42,4 @@ tzdata==2026.3
 urllib3==2.7.0
 uvicorn==0.51.0
 websockets==16.1
-Markdown==3.x.x
+Markdown==3.10.2
