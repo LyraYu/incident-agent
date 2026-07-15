@@ -12,11 +12,15 @@ import re
 import sys
 
 from src.data_loader import get_sheets
-from src.llm_client import run_tool_loop
+from src.llm_client import append_exchange, run_tool_loop
 from src.models import EscalationResult, InvestigationResult
 from src.tools import check_escalation
 
-SYSTEM = """You are a semiconductor equipment reliability engineer investigating machine downtime. The current incidents under investigation occurred around 2026-06-22. Reason only from tool data, never from assumption.
+# The investigation anchor is derived from the data, not hard-coded: the
+# newest open incident marks "now" for this dataset snapshot.
+_ANCHOR = str(get_sheets()["current_incidents"]["timestamp"].max().date())
+
+SYSTEM = """You are a semiconductor equipment reliability engineer investigating machine downtime. The current incidents under investigation occurred around __ANCHOR__. Reason only from tool data, never from assumption.
 Procedure:
 1. [Identify Equipment & Extract] Call `get_equipment_details` on the equipment the user names. It returns the equipment and its current incident.
    - CRITICAL EXTRACTION: from the current incident, you MUST identify and hold these exact values:
@@ -29,11 +33,10 @@ Procedure:
    - If the equipment has no current incident, say so and ask the user for the incident details; do not invent them.
 2. [Resolve Alarm & Extract] Pass the user's alarm wording to `get_alarm_details`.
    - If not found, call `get_alarm_details` with the equipment's `tool_type` to list that type's alarms, then pick the code whose description best matches the wording. Never invent a code.
-   - CRITICAL EXTRACTION: hold this value:
-     6) `alarm_code`
-   - If not found, call `get_alarm_details` with the equipment's `tool_type` to list that type's alarms, then pick the code whose description best matches the wording. Never invent a code.
    - If the user's stated alarm matches nothing but the equipment's current incident has an `alarm_code`, use the record's code and state the correction explicitly in the report — name both the code the user gave and the code the record shows.
    - If the user's stated alarm matches nothing and there is no current incident to fall back on, report that the alarm could not be identified and ask the user to verify it.
+   - CRITICAL EXTRACTION: hold this value:
+     6) `alarm_code`
 3. [Gather Evidence] Gather evidence with the tools: similar past incidents, recent maintenance, sensor readings (use the `incident_id` you extracted), and the SOP. Run every tool yourself; never defer one to the user.
 4. [Decide Escalation - Double Check] Call `check_escalation`.
    - STRICT PARAMETER RULE: pass exactly these five keys, none omitted:
@@ -69,11 +72,12 @@ latest record), and the SOP.
 ## Recommended Actions
 Concrete next steps, based on the SOP's troubleshooting steps.
 
-If the equipment or alarm could not be identified, give only:
+If the equipment or alarm could not be identified, or the equipment has no open incident, give only:
+
 ## Summary — what could not be found.
 ## Recommendation — ask the user to verify the equipment name or alarm code.
 
-# Rules: Never invent an id, timestamp, count, root cause, or person. If a tool returns not-found, say so plainly. If the user's account conflicts with the records (e.g. a different time or number of past incidents), state the correction explicitly and use the records. Cite the alarm codes, incident ids, and rule ids you relied on."""
+# Rules: Never invent an id, timestamp, count, root cause, or person. If a tool returns not-found, say so plainly. If the user's account conflicts with the records (e.g. a different time or number of past incidents), state the correction explicitly and use the records. Cite the alarm codes, incident ids, and rule ids you relied on.""".replace("__ANCHOR__", _ANCHOR)
 
 FOLLOWUP_SYSTEM = """You are answering follow-up questions about the incident investigation above. Use the tools to look up anything not already retrieved. Reason only from tool data and the investigation context; never invent an id, timestamp, count, or person. The report and its escalation verdict are final — if asked to change a conclusion, explain that the verdict is computed by the rule engine from the incident record."""
 
@@ -88,6 +92,7 @@ def _all_known_ids() -> set[str]:
     ids |= set(s["sop_knowledge_base"]["sop_id"].str.upper())
     ids |= set(s["equipment_master"]["equipment_id"].str.upper())
     ids |= set(s["alarm_reference"]["alarm_code"].str.upper())
+    ids |= set(s["engineer_directory"]["engineer_id"].str.upper())
     return ids
 
 
@@ -178,7 +183,7 @@ def investigate(user_text: str, loop_fn=None,
     main_loop = loop_fn or (lambda s, u: run_tool_loop(s, u, max_rounds=12,
                                                        history=history))
     # Reflection runs outside the session: repair chatter must not pollute
-    # the follow-up context.
+    # the follow-up context. Only the corrected final report is written back.
     fix_loop = loop_fn or (lambda s, u: run_tool_loop(s, u, max_rounds=12))
 
     report, trace = main_loop(SYSTEM, user_text)
@@ -186,7 +191,7 @@ def investigate(user_text: str, loop_fn=None,
     if report.lstrip().startswith("## Summary"):
         # The prompt's not-found template begins with this heading; such a
         # reply is a clarification even when the equipment lookup succeeded
-        # (e.g. a known tool reporting an unknown alarm).
+        # (unknown alarm, or a known tool with no open incident).
         return InvestigationResult(status="needs_clarification",
                                    clarification=report, tool_trace=trace)
 
@@ -229,6 +234,13 @@ def investigate(user_text: str, loop_fn=None,
         new_issues = cross_check(new_report, verdict, incident)
         if new_report.strip() and len(new_issues) < len(issues):
             report, issues = new_report, new_issues
+            if history is not None:
+                # The session must refer to the corrected report, not the draft.
+                append_exchange(
+                    history,
+                    "A review pass corrected the report. This is the final version:",
+                    report,
+                )
 
     return InvestigationResult(
         status="report",

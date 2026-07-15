@@ -13,4 +13,4 @@ DATA_PATH = PROJECT_ROOT / "data" / "Incident_Investigation_dataset.xlsx"
 
 # --- LLM model ---
 GEMINI_MODEL = "gemini-3-flash-preview"
-GEMINI_THINKING_LEVEL = "low"   # 3.x 延迟档位: minimal/low/medium/high
+GEMINI_THINKING_LEVEL = "low"

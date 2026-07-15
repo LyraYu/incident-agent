@@ -18,12 +18,12 @@
 | _TC002: Should ask or infer alarm if possible; retrieve CMP205 context when matched to pressure alarm._ |||||||||
 | TC003 | 1 | yes | yes | yes | 0 | 0 | - | yes |
 | TC003 | 2 | yes | yes | yes | 0 | 0 | - | yes |
-| TC003 | 3 | yes | yes | yes | 0 | 0 | - | yes |
-| TC003 | 4 | yes | yes | yes | 0 | 0 | - | yes |
-| TC003 | 5 | yes | yes | yes | 0 | 0 | - | yes |
+| TC003 | 3 | yes | yes | yes | 0 | 0 | yes | yes |
+| TC003 | 4 | yes | yes | yes | 0 | 0 | yes | yes |
+| TC003 | 5 | yes | yes | yes | 0 | 0 | yes | yes |
 | _TC003: Should retrieve GAS012, CVD maintenance and SOP; escalate due to high severity and downtime._ |||||||||
-| TC004 | 1 | yes | yes | yes | 0 | 0 | - | yes |
-| TC004 | 2 | yes | yes | yes | 0 | 0 | - | yes |
+| TC004 | 1 | yes | yes | yes | 0 | 0 | yes | yes |
+| TC004 | 2 | yes | yes | yes | 0 | 0 | yes | yes |
 | TC004 | 3 | yes | yes | yes | 0 | 0 | - | yes |
 | TC004 | 4 | yes | yes | yes | 0 | 0 | - | yes |
 | TC004 | 5 | yes | yes | yes | 0 | 0 | - | yes |
@@ -34,11 +34,11 @@
 | TC005 | 4 | yes | - | - | 0 | 0 | - | yes |
 | TC005 | 5 | yes | - | - | 0 | 0 | - | yes |
 | _TC005: Should handle missing equipment/alarm gracefully and request clarification._ |||||||||
-| CUST-A | 1 | yes | yes | yes | 0 | 0 | - | yes |
-| CUST-A | 2 | yes | yes | yes | 0 | 0 | - | yes |
+| CUST-A | 1 | yes | yes | NO | 0 | 0 | - | NO |
+| CUST-A | 2 | yes | yes | NO | 0 | 0 | - | NO |
 | CUST-A | 3 | yes | yes | yes | 0 | 0 | - | yes |
-| CUST-A | 4 | yes | yes | yes | 0 | 0 | - | yes |
-| CUST-A | 5 | yes | yes | yes | 0 | 0 | - | yes |
+| CUST-A | 4 | yes | yes | NO | 0 | 0 | - | NO |
+| CUST-A | 5 | yes | yes | NO | 0 | 0 | - | NO |
 | _CUST-A: unknown alarm code on a known equipment -> corrected from the incident record with an explicit note, not guessed_ |||||||||
 | CUST-B | 1 | yes | yes | - | 0 | 0 | - | yes |
 | CUST-B | 2 | yes | yes | - | 0 | 0 | - | yes |
@@ -53,4 +53,4 @@
 | CUST-C | 5 | yes | - | - | 0 | 0 | - | yes |
 | _CUST-C: known equipment without an open incident -> ask for incident details_ |||||||||
 
-**40/40 passed.**
+**36/40 passed.**

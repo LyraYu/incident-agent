@@ -12,8 +12,10 @@ from pydantic import BaseModel, Field
 
 from src.agent import follow_up, investigate
 from src.models import InvestigationResult
+from src.ui import SESSIONS, FollowUpRequest, IncidentRequest, router as ui_router
 
 app = FastAPI(title="Incident Investigation Agent")
+app.include_router(ui_router)
 
 # In-memory, single-process session store; a production deployment would
 # externalize this (e.g. Redis) and add expiry.

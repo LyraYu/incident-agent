@@ -32,6 +32,7 @@ src/
   data_loader.py  # cached read-only access to the Excel dataset
   config.py       # model + thinking-level configuration
   api.py          # FastAPI shell: investigate, follow-up sessions, report views
+  ui.py           # engineer-facing web page (investigate + follow-up in one place)
 tests/
   test_agent.py   # 10 offline tests (official cases, extra scenarios, guardrails)
 eval.py           # live evaluation harness -> eval_results.md
@@ -97,7 +98,8 @@ time?") against the same session.
 uvicorn src.api:app --port 8000
 ```
 
-Interactive docs at http://localhost:8000/docs. Endpoints:
+Interactive docs at http://localhost:8000/docs; the engineer-facing web UI
+is at http://localhost:8000/ui. Endpoints:
 
 | Endpoint | Purpose |
 |---|---|
@@ -105,6 +107,7 @@ Interactive docs at http://localhost:8000/docs. Endpoints:
 | `POST /follow_up` | ask a question about a previous session (`session_id` + `question`) |
 | `POST /investigate/report` | plain-text report only |
 | `GET /report/demo?text=...` | rendered HTML report, open directly in a browser |
+| `GET /ui` | engineer-facing web page: describe an incident, read the report, ask follow-ups |
 | `GET /health` | health check |
 
 ```bash
@@ -145,15 +148,19 @@ exercised by both the offline tests and the live evaluation.
 ## Testing
 
 ```bash
-pytest -q                    # 10 offline tests, no API key, ~4 s
+pytest -q                    # 12 offline tests, no API key, ~5 s
 python eval.py               # live evaluation, all 7 cases -> eval_results.md
 python eval.py --runs 3      # stability check
 python -m src.llm_client     # offline self-check of the tool loop
 ```
 
-The committed `eval_results.md` shows the current matrix: **14/14 passed**
-(two runs per case), scored deterministically on status, exact escalation
-rule set, required citations, shipped issues, and fabricated ids.
+The committed matrices show 5 runs per case on both model tiers, scored
+deterministically on status, exact escalation rule set, required citations,
+shipped issues, and fabricated ids: **40/40** on the default tier
+(`eval_results.md`) and **36/40** on the deliberately weak stress tier
+(`eval_results_flashlite.md`) — the escalation verdict was correct in all 80
+runs and zero errors shipped silently on either tier. See the design
+document, section 6.
 
 ## How correctness is guaranteed
 
@@ -172,9 +179,10 @@ rule set, required citations, shipped issues, and fabricated ids.
 
 ## Notes and limitations
 
-- `gemini-3-flash-preview` is a preview model; under load Google may return
-  503s. The client retries with backoff automatically; switching to the GA
-  `gemini-3.1-flash-lite` (one line in `config.py`) avoids this entirely.
+- `gemini-3-flash-preview` is a preview model; at peak hours Google may
+  occasionally return 503s. The client retries with backoff automatically
+  (visible as `[retry]` lines), so runs complete — they may just take longer.
+  The GA `gemini-3.1-flash-lite` is a one-line fallback in `config.py`.
 - Follow-up sessions are held in process memory; a production deployment
   would externalize the store and add expiry.
 - Some maintenance records in the dataset post-date the incidents; they are

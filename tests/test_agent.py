@@ -153,11 +153,13 @@ def test_reflection_repairs_flagged_report():
         calls.append(system)
         return (bad, list(trace)) if len(calls) == 1 else (good, [])
 
-    r = investigate("Litho-01 alignment failure...", loop_fn=loop)
+    history = []
+    r = investigate("Litho-01 alignment failure...", loop_fn=loop, history=history)
     assert len(calls) == 2                 # reflection ran exactly once
     assert "R005" in calls[1]              # the fix prompt named the issue
     assert "Emily Ng" in r.report          # the repaired report was adopted
     assert r.cross_check_issues == []
+    assert "Emily Ng" in history[-1].parts[0].text   # final report entered the session
 
 
 def test_unknown_alarm_on_known_equipment_clarifies():
@@ -189,3 +191,24 @@ def test_follow_up_scans_answer_for_fabricated_ids():
     bad, issues = follow_up("what fixed it?", history=[],
                             loop_fn=lambda s, u: ("See incident H999 for details.", []))
     assert issues and "H999" in issues[0]
+
+
+def test_cross_check_flags_fabricated_engineer_id():
+    verdict = check_escalation(equipment_id="EQ004", alarm_code="ALIGN011",
+                               incident_timestamp="2026-06-22 15:20",
+                               downtime_minutes=12, affected_lot="LOT1058")
+    incident = {"incident_id": "INC004", "alarm_code": "ALIGN011",
+                "affected_lot": "LOT1058"}
+    bad = ("# Incident Report INC004 — ALIGN011 on EQ004, lot LOT1058. "
+           "R005 Manufacturing Supervisor (Emily Ng, ENG999, emily.ng@example.com).")
+    assert any("ENG999" in i for i in cross_check(bad, verdict, incident))
+
+
+def test_known_equipment_without_incident_clarifies():
+    trace = [_eq_step("Diffusion-02")]   # exists in master, no open incident
+    report = ("## Summary — what could not be found.\n"
+              "Diffusion-02 (EQ007) has no open incident on record.\n"
+              "## Recommendation — provide the incident details to investigate.")
+    r = investigate("Diffusion-02 pump making noise.", loop_fn=_loop(report, trace))
+    assert r.status == "needs_clarification"
+    assert "EQ007" in r.clarification

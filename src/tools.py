@@ -100,7 +100,7 @@ def get_equipment_details(identifier):
         tool_type=row["tool_type"], line=row["line"], bay=row["bay"], vendor=row["vendor"],
         model=row["model"], install_year=int(row["install_year"]), status=row["status"],
         process_area=row["process_area"], primary_engineer_id=row["primary_engineer_id"],
-        current_incident=_current_incident(row["equipment_id"]))    # ← 新增：附上当前事故
+        current_incident=_current_incident(row["equipment_id"]))
 
 
 def get_sop(alarm_code: str) -> SopDetail | None:

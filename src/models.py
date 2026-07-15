@@ -40,7 +40,7 @@ class EquipmentDetail(BaseModel):
     status: str
     process_area: str
     primary_engineer_id: str
-    current_incident: CurrentIncident | None = None    # ← 新增这一行
+    current_incident: CurrentIncident | None = None
 
 class SopDetail(BaseModel):
     """One standard operating procedure, from sop_knowledge_base."""

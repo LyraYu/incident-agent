@@ -196,27 +196,10 @@ def _call_with_retry(call: Callable[[], Any]) -> Any:
             time.sleep(delay)
 
 
-def generate_structured(system: str, user: str, schema: type[BaseModel]) -> Any:
-    """One no-tools call that must return an instance of `schema`.
-
-    Kept as a general capability even though the thin agent does not currently
-    use it — any caller that needs structured output from the model can.
-    """
-    client = get_client()
-    config = types.GenerateContentConfig(
-        system_instruction=system,
-        response_mime_type="application/json",
-        response_schema=schema,
-    )
-    response = _call_with_retry(
-        lambda: client.models.generate_content(
-            model=GEMINI_MODEL, contents=user, config=config
-        )
-    )
-    parsed = getattr(response, "parsed", None)
-    if parsed is not None:
-        return parsed
-    return schema.model_validate_json(response.text)
+def append_exchange(history: list, user: str, model: str) -> None:
+    """Record one user/model turn pair in a session history."""
+    history.append(types.Content(role="user", parts=[types.Part(text=user)]))
+    history.append(types.Content(role="model", parts=[types.Part(text=model)]))
 
 
 def run_tool_loop(
@@ -229,18 +212,22 @@ def run_tool_loop(
     """Manual tool loop. Returns (final_text, trace).
 
     `system` is whatever prompt the caller hands in — this module has no
-    opinion on its content. `history`: pass a list to keep the conversation — the loop extends it in
-    place, so passing the same list again continues the session.
-    trace is one dict per executed call:
+    opinion on its content. trace is one dict per executed call:
     {"tool", "args", "ok", "payload"}. Returns ("", trace) if the round
     budget is exhausted.
     """
     if generate_fn is None:
         client = get_client()
+        # thinking_level is a Gemini 3.x knob; older tiers reject it, so it is
+        # sent only when configured. Switching models touches config.py alone.
+        thinking = (
+            types.ThinkingConfig(thinking_level=GEMINI_THINKING_LEVEL)
+            if GEMINI_THINKING_LEVEL else None
+        )
         config = types.GenerateContentConfig(
             system_instruction=system,
             tools=[types.Tool(function_declarations=TOOL_DECLARATIONS)],
-            thinking_config=types.ThinkingConfig(thinking_level=GEMINI_THINKING_LEVEL),
+            thinking_config=thinking,
         )
 
         def generate_fn(contents):
@@ -251,8 +238,7 @@ def run_tool_loop(
             )
 
     contents: list = history if history is not None else []
-    contents.append(types.Content(role="user", parts=[types.Part(text=user)]))    
-    
+    contents.append(types.Content(role="user", parts=[types.Part(text=user)]))
     trace: list[dict] = []
 
     for _ in range(max_rounds):

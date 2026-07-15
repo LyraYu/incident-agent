@@ -45,8 +45,9 @@ MUST_CITE = {
     "CUST-A": {"XYZ888", "RF101"},
 }
 
-# Additional scenarios (not in the sheet), covering the assignment's
-# "Unknown alarm" and "Missing information" requirements head-on.
+# Additional scenarios (not in the sheet): the assignment's "Unknown alarm"
+# and "Missing information" requirements head-on, plus the third clarification
+# path (a known equipment with no open incident).
 CUSTOM_CASES = [
     ("CUST-A",
      "Etcher-03 reports alarm XYZ888, downtime 20 minutes.",
@@ -59,6 +60,10 @@ CUSTOM_CASES = [
      {"status": "report",
       "rules": {"R001", "R002", "R003", "R004", "R005"}},
      "minimal information -> all facts recovered from the incident record"),
+    ("CUST-C",
+     "Diffusion-02 pump making abnormal noise, please investigate.",
+     {"status": "needs_clarification"},
+     "known equipment without an open incident -> ask for incident details"),
 ]
 
 

@@ -42,11 +42,12 @@ presents the test data behind this claim.
 | `llm_client.py` | Gemini client, tool declarations, manual tool loop, retry |
 | `models.py` | pydantic models for tool outputs, verdict, and the final result |
 | `api.py` | FastAPI shell over `investigate()` |
+| `ui.py` | engineer-facing web page: investigate and follow up in one place |
 
-The CLI and the REST API are both thin shells over the same `investigate()`
-function, so every test result applies to both interfaces. The service also
-ships with a Dockerfile for one-command startup; the venv path remains the
-development workflow.
+The web UI, the CLI and the REST API are all thin shells over the same
+`investigate()` function, so every test result applies to all three
+interfaces. The service also ships with a Dockerfile for one-command
+startup; the venv path remains the development workflow.
 
 ## 2. Agent workflow and orchestration
 
@@ -249,36 +250,45 @@ session store with expiry.
 
 ## 6. Testing and reliability evidence
 
-**Offline tests** (`pytest -q`, no API key, ~4 s): ten tests — the five
+**Offline tests** (`pytest -q`, no API key, ~5 s): twelve tests — the five
 official cases asserted on verdict rule sets, escalation semantics, and a
-clean cross-check; the two additional scenarios (unknown alarm, minimal
-input); a follow-up answer scan; and two guardrail tests that pin the safety
-net itself — a report missing a triggered rule must be flagged with the
-exact corrective line, and the reflection pass must repair it.
+clean cross-check; the additional scenarios (unknown alarm, minimal input,
+no open incident); a follow-up answer scan; and guardrail tests that pin the
+safety net itself — a report missing a triggered rule or citing a fabricated
+engineer id must be flagged (with the exact corrective line), and the
+reflection pass must repair it and write the corrected report back into the
+session.
 
-**Live evaluation** (`python eval.py`): every case — official five plus the
-two additional scenarios — run against the real model and scored
-deterministically (status, exact escalation rule set, required citations,
-shipped issues, fabricated ids). The committed `eval_results.md` shows
-**14/14 passed** at two runs per case; a reviewer can regenerate it with one
+**Live evaluation** (`python eval.py --runs 5`): all eight cases were run
+five times against each model tier with identical code, prompts, and
+deterministic scoring. Both matrices are committed
+(`eval_results.md`, `eval_results_flashlite.md`) and regenerable with one
 command.
-
-**Stress batches.** The same inputs were also run repeatedly against two
-model tiers with identical code and prompts:
 
 | | `gemini-3.1-flash-lite` (stress) | `gemini-3-flash-preview` (default) |
 |---|---|---|
-| runs | 30+ (TC004 focus) | 50+ (all cases) |
-| model omits a verdict parameter | ~50% of runs | 0 |
-| silent wrong reports | **0** | 0 |
-| final report correct | 100% | 100% |
+| runs | 40 (8 cases × 5) | 40 (8 cases × 5) |
+| passed | 36/40 | 40/40 |
+| escalation verdict correct | 40/40 | 40/40 |
+| fabricated ids shipped | 0 | 0 |
+| **silent wrong reports** | **0** | **0** |
+| self-repaired by reflection | 5 runs | 0 |
+| failures (all visible in the matrix) | 4 × missing explicit-correction phrasing (CUST-A) | — |
 
-The lite runs are the point: even with the model dropping a required fact in
-half of all runs, no error shipped silently — every fault was either
-repaired by the reflection pass on the spot or visible in
-`cross_check_issues`. Under the submission model the safety net is almost
-entirely idle.
+The failure taxonomy is the point: across all eighty scored runs, every
+failure was a prose-level citation obligation — precisely localized by the
+scorer — and none touched the deterministic layer. The verdict, the
+escalation contacts, and every cited identifier were correct in all 80 runs.
+The weak tier also exercised the safety net five times (reports shipped
+clean after repair), while the explicit-correction phrasing shows the
+expected tier gap: 5/5 on the default model, 1/5 on the weak one — a
+prompt-enforced behaviour, measured rather than assumed.
 
-Live outputs were verified field-by-field against the dataset (sensor values,
-engineer ids and emails, history ids and dates, maintenance records, SOP
-steps) during batch review.
+Earlier development-time batches (30+ runs focused on the weakest case)
+observed the weak tier omitting a required verdict parameter in roughly half
+of all runs; that observation motivated the verdict-by-construction design
+in decision A.
+
+Live outputs were additionally verified field-by-field against the dataset
+(sensor values, engineer ids and emails, history ids and dates, maintenance
+records, SOP steps) during batch review.
