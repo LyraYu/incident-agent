@@ -29,12 +29,14 @@ def investigate_incident(req: IncidentRequest) -> InvestigationResult:
 
     Returns a structured report with an escalation verdict, cross-check
     findings, the full tool trace, and a session_id for follow-up questions —
-    or a clarification request if the equipment or alarm cannot be identified.
+    or a clarification request (session_id stays null) if the equipment or
+    alarm cannot be identified.
     """
     history: list = []
     result = investigate(req.text, history=history)
-    result.session_id = str(uuid.uuid4())
-    SESSIONS[result.session_id] = history
+    if result.status == "report":
+        result.session_id = str(uuid.uuid4())
+        SESSIONS[result.session_id] = history
     return result
 
 
