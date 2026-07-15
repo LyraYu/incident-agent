@@ -192,3 +192,6 @@ document, section 6.
 - Prose wording inside the analysis sections is the model's responsibility;
   identifiers, escalation facts, and the verdict are guarded by code. See the
   design document's limitations section for examples.
+- One call investigates one incident. If the input describes several, only
+  the first retrieved incident gets the deterministic verdict and
+  cross-check — submit incidents separately.

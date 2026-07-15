@@ -266,6 +266,13 @@ natural language), and an externalized session store with expiry.
   Symmetrically, a user-supplied wrong code that reuses a known prefix (say
   RF999) would be flagged by the scan even when the report cites it only to
   correct it — a visible false alarm, never a silent one.
+- One investigation covers one incident. Given a description that names
+  several equipments, the model may well write a report section for each,
+  but the deterministic layer anchors to the first incident it retrieved:
+  the authoritative verdict, the incident-fact checks, and the reflection
+  gate cover that incident only, and the API's `escalation` field
+  describes it alone. Any further sections are model prose guarded only
+  by the fabricated-id scan. The supported path is one call per incident.
 
 ## 6. Testing and reliability evidence
 
