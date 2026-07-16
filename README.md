@@ -38,7 +38,7 @@ tests/
 eval.py           # live evaluation harness -> eval_results.md
 eval_results.md   # committed evaluation matrix (default tier, 40/40)
 eval_results_flashlite.md   # stress-tier matrix (36/40)
-DESIGN.md         # design document (submitted as DESIGN.docx)
+DESIGN.md         # design document (submitted as DESIGN.pdf)
 Dockerfile        # container packaging (one-command startup)
 docs/
   sample_report_CMP-02.pdf   # a rendered report, printed from the HTML view
